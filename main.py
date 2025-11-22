@@ -1,13 +1,16 @@
 import asyncio
 import logging
+from datetime import datetime
+
 import aiosqlite
+from aiofiles import os
 
 from parsers.epic_parser import parse_epic_price
 from parsers.gog_parser import parse_gog_price
 from parsers.___init___ import parse_game_price
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, CallbackQuery, FSInputFile
 import database as db
 from parsers.steam_parser import parse_steam_price
 
@@ -844,6 +847,837 @@ async def test_fixed_handler(message: types.Message):
 
         await message.answer(text, parse_mode="HTML")
         await asyncio.sleep(1)
+
+
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters import CommandObject
+
+# Список администраторов (замени на свои ID)
+ADMIN_IDS = [123456789, 987654321]  # Твои ID через запятую
+
+
+@dp.message(Command("admin"))
+async def admin_panel(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Доступ запрещен")
+        return
+
+    # Получаем статистику
+    user_count = await db.get_user_count()
+    total_revenue = await db.get_total_revenue()
+    active_subs = await db.get_active_subscriptions()
+    today_users = await db.get_today_users()
+
+    # Создаем клавиатуру для быстрых действий
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
+            InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users")
+        ],
+        [
+            InlineKeyboardButton(text="💰 Финансы", callback_data="admin_finance"),
+            InlineKeyboardButton(text="🎮 Подписки", callback_data="admin_subs")
+        ],
+        [
+            InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast"),
+            InlineKeyboardButton(text="🔄 Бэкап", callback_data="admin_backup")
+        ]
+    ])
+
+    text = f"""
+🛠 <b>Админ-панель | GameMonitor Bot</b>
+
+👥 <b>Пользователи:</b>
+   Всего: <code>{user_count}</code>
+   Новые сегодня: <code>{today_users}</code>
+
+💰 <b>Финансы:</b>
+   Общий оборот: <code>{total_revenue} руб</code>
+   Активные подписки: <code>{active_subs}</code>
+
+⚙️ <b>Быстрые действия:</b>
+"""
+    await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+# Обработчики кнопок админ-панели
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats_handler(callback: CallbackQuery):
+    await callback.answer()
+    await show_statistics(callback.message, [])
+
+
+@dp.callback_query(F.data == "admin_users")
+async def admin_users_handler(callback: CallbackQuery):
+    await callback.answer()
+    await show_statistics(callback.message, ["users"])
+
+
+@dp.callback_query(F.data == "admin_finance")
+async def admin_finance_handler(callback: CallbackQuery):
+    await callback.answer()
+    await show_statistics(callback.message, ["payments"])
+
+
+@dp.callback_query(F.data == "admin_subs")
+async def admin_subs_handler(callback: CallbackQuery):
+    await callback.answer()
+    await show_statistics(callback.message, ["subs"])
+
+
+@dp.callback_query(F.data == "admin_broadcast")
+async def admin_broadcast_handler(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(
+        "📢 <b>Рассылка сообщений</b>\n\n"
+        "Используйте команду:\n"
+        "<code>/broadcast Ваш текст сообщения</code>\n\n"
+        "Или:\n"
+        "<code>/broadcast_test Тестовое сообщение</code>",
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data == "admin_backup")
+async def admin_backup_handler(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer(
+        "💾 <b>Управление бэкапами</b>\n\n"
+        "Команды:\n"
+        "<code>/backup</code> - создать бэкап\n"
+        "<code>/backup list</code> - список бэкапов\n"
+        "<code>/backup auto</code> - настройка авто-бэкапов",
+        parse_mode="HTML"
+    )
+
+
+async def show_statistics(message: types.Message, args: list):
+    """Показать статистику в зависимости от аргументов"""
+
+    if not args:
+        # Общая статистика
+        users_stats = await db.get_users_statistics()
+        payments_stats = await db.get_payments_statistics()
+        subs_stats = await db.get_subscriptions_statistics()
+
+        text = f"""
+📊 <b>Общая статистика</b>
+
+👥 <b>Пользователи:</b>
+   Всего: <code>{users_stats['total']}</code>
+   Активных: <code>{users_stats['active']}</code>
+   Новых за месяц: <code>{users_stats['new_month']}</code>
+
+💰 <b>Финансы:</b>
+   Общий оборот: <code>{payments_stats['total_revenue']} руб</code>
+   Средний чек: <code>{payments_stats['avg_check']} руб</code>
+   Пополнений: <code>{payments_stats['deposits_count']}</code>
+
+🎮 <b>Подписки:</b>
+   Активных: <code>{subs_stats['active']}</code>
+   Всего создано: <code>{subs_stats['total']}</code>
+   Сработавших: <code>{subs_stats['triggered']}</code>
+
+<b>Последние платежи:</b>
+"""
+        # Добавляем последние платежи
+        for payment in payments_stats['recent_payments'][:3]:
+            game_name, price, date = payment
+            text += f"   🎮 {game_name}: {price} руб\n"
+
+        # Клавиатура для детальной статистики
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="👥 Детально по пользователям", callback_data="stats_users_detailed"),
+                InlineKeyboardButton(text="💰 Детально по финансам", callback_data="stats_payments_detailed")
+            ],
+            [
+                InlineKeyboardButton(text="🎮 Детально по подпискам", callback_data="stats_subs_detailed"),
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_stats")
+            ]
+        ])
+
+    elif args[0] == "users":
+        # Детальная статистика по пользователям
+        users_data = await db.get_detailed_users_stats()
+
+        text = "👥 <b>Детальная статистика по пользователям</b>\n\n"
+
+        text += "<b>Распределение по балансам:</b>\n"
+        for balance_range, count in users_data['balance_distribution']:
+            text += f"   {balance_range}: {count} чел.\n"
+
+        text += "\n<b>Активность пользователей:</b>\n"
+        for activity, count in users_data['user_activity']:
+            text += f"   {activity}: {count} чел.\n"
+
+        text += "\n<b>Топ пользователей по балансу:</b>\n"
+        for i, (user_id, balance) in enumerate(users_data['top_users'][:5], 1):
+            text += f"   {i}. ID {user_id}: {balance} руб\n"
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад к статистике", callback_data="admin_stats")]
+        ])
+
+    elif args[0] == "payments":
+        # Детальная статистика по платежам
+        payments_stats = await db.get_payments_statistics()
+
+        text = "💰 <b>Детальная финансовая статистика</b>\n\n"
+
+        text += f"<b>Основные метрики:</b>\n"
+        text += f"   Общий оборот: <code>{payments_stats['total_revenue']} руб</code>\n"
+        text += f"   Количество платежей: <code>{payments_stats['deposits_count']}</code>\n"
+        text += f"   Средний чек: <code>{payments_stats['avg_check']} руб</code>\n"
+
+        text += f"\n<b>Последние 5 платежей:</b>\n"
+        for payment in payments_stats['recent_payments']:
+            game_name, price, date = payment
+            date_str = date[:16] if date else "N/A"
+            text += f"   🎮 {game_name}: {price} руб ({date_str})\n"
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад к статистике", callback_data="admin_stats")]
+        ])
+
+    elif args[0] == "subs":
+        # Детальная статистика по подпискам
+        subs_stats = await db.get_subscriptions_statistics()
+
+        text = "🎮 <b>Детальная статистика по подпискам</b>\n\n"
+
+        text += f"<b>Основные метрики:</b>\n"
+        text += f"   Всего подписок: <code>{subs_stats['total']}</code>\n"
+        text += f"   Активных: <code>{subs_stats['active']}</code>\n"
+        text += f"   Сработавших: <code>{subs_stats['triggered']}</code>\n"
+
+        text += f"\n<b>Популярные игры для отслеживания:</b>\n"
+        for i, (game_name, count) in enumerate(subs_stats['popular_games'][:5], 1):
+            text += f"   {i}. {game_name}: {count} подписок\n"
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад к статистике", callback_data="admin_stats")]
+        ])
+
+    else:
+        text = "❌ Неизвестный раздел статистики"
+        keyboard = None
+
+    if hasattr(message, 'edit_text'):
+        await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+
+@dp.message(Command("statistics"))
+async def statistics_handler(message: types.Message, command: CommandObject = None):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Доступ запрещен")
+        return
+
+    args = command.args.split() if command and command.args else []
+    await show_statistics(message, args)
+
+
+# Обработчики для детальной статистики
+@dp.callback_query(F.data == "stats_users_detailed")
+async def stats_users_detailed_handler(callback: CallbackQuery):
+    await callback.answer()
+    await show_statistics(callback.message, ["users"])
+
+
+@dp.callback_query(F.data == "stats_payments_detailed")
+async def stats_payments_detailed_handler(callback: CallbackQuery):
+    await callback.answer()
+    await show_statistics(callback.message, ["payments"])
+
+
+@dp.callback_query(F.data == "stats_subs_detailed")
+async def stats_subs_detailed_handler(callback: CallbackQuery):
+    await callback.answer()
+    await show_statistics(callback.message, ["subs"])
+
+
+import asyncio
+import schedule
+import time
+from threading import Thread
+
+
+class BackupManager:
+    def __init__(self):
+        self.auto_backup_enabled = True
+        self.backup_schedule = "03:00"  # Каждый день в 3:00
+
+    async def start_auto_backups(self):
+        """Запуск автоматических бэкапов"""
+        if not self.auto_backup_enabled:
+            return
+
+        def run_scheduler():
+            schedule.every().day.at(self.backup_schedule).do(
+                lambda: asyncio.create_task(self.create_auto_backup())
+            )
+
+            while True:
+                schedule.run_pending()
+                time.sleep(60)
+
+        # Запускаем в отдельном потоке
+        thread = Thread(target=run_scheduler, daemon=True)
+        thread.start()
+        logging.info(f"Автоматические бэкапы запущены (расписание: {self.backup_schedule})")
+
+    async def create_auto_backup(self):
+        """Создание автоматического бэкапа"""
+        try:
+            result = await db.create_backup("auto")
+            if result['success']:
+                logging.info(f"Авто-бэкап создан: {result['filename']}")
+
+                # Уведомляем админов
+                for admin_id in ADMIN_IDS:
+                    try:
+                        await bot.send_message(
+                            admin_id,
+                            f"✅ <b>Автоматический бэкап создан</b>\n"
+                            f"Файл: {result['filename']}\n"
+                            f"Размер: {result['size'] / 1024 / 1024:.2f} MB\n"
+                            f"Время: {datetime.now().strftime('%H:%M %d.%m.%Y')}",
+                            parse_mode="HTML"
+                        )
+                    except:
+                        continue
+            else:
+                logging.error(f"Ошибка авто-бэкапа: {result['error']}")
+
+        except Exception as e:
+            logging.error(f"Ошибка в авто-бэкапе: {e}")
+
+
+# Создаем менеджер бэкапов
+backup_manager = BackupManager()
+
+
+@dp.message(Command("backup"))
+async def backup_handler(message: types.Message, command: CommandObject = None):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Доступ запрещен")
+        return
+
+    args = command.args.split() if command and command.args else []
+
+    if not args:
+        # Создание бэкапа
+        await message.answer("🔄 Создаю бэкап...")
+        result = await db.create_backup("manual")
+
+        if result['success']:
+            file_size = result['size'] / 1024 / 1024  # MB
+
+            # Отправляем файл бэкапа
+            await message.answer_document(
+                document=FSInputFile(result['backup_path']),
+                caption=(
+                    f"✅ <b>Бэкап создан успешно!</b>\n\n"
+                    f"📁 Файл: <code>{result['filename']}</code>\n"
+                    f"💾 Размер: {file_size:.2f} MB\n"
+                    f"🕐 Время: {datetime.now().strftime('%H:%M %d.%m.%Y')}\n\n"
+                    f"<i>Бэкап автоматически очищаются, остаются только последние 10</i>"
+                ),
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(f"❌ Ошибка создания бэкапа: {result['error']}")
+
+    elif args[0] == "list":
+        # Список бэкапов
+        backups = await db.get_backup_list()
+
+        if not backups:
+            await message.answer("📂 Бэкапы не найдены")
+            return
+
+        text = "📂 <b>Список бэкапов:</b>\n\n"
+        for i, backup in enumerate(backups[:10], 1):  # Показываем последние 10
+            size_mb = backup['size'] / 1024 / 1024
+            mod_time = backup['modified'].strftime('%d.%m.%Y %H:%M')
+
+            text += f"{i}. <code>{backup['filename']}</code>\n"
+            text += f"   📏 {size_mb:.2f} MB | 🕐 {mod_time}\n\n"
+
+        # Клавиатура для управления бэкапами
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔄 Создать новый", callback_data="backup_create"),
+                InlineKeyboardButton(text="🧹 Очистить старые", callback_data="backup_cleanup")
+            ]
+        ])
+
+        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
+
+    elif args[0] == "auto":
+        # Управление авто-бэкапами
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Включены" if backup_manager.auto_backup_enabled else "❌ Выключены",
+                    callback_data="backup_toggle_auto"
+                )
+            ],
+            [
+                InlineKeyboardButton(text="🕐 Изменить расписание", callback_data="backup_change_schedule"),
+                InlineKeyboardButton(text="🔄 Создать сейчас", callback_data="backup_create_auto")
+            ],
+            [
+                InlineKeyboardButton(text="🔙 Назад", callback_data="admin_backup")
+            ]
+        ])
+
+        await message.answer(
+            f"🤖 <b>Автоматические бэкапы</b>\n\n"
+            f"Статус: {'✅ Включены' if backup_manager.auto_backup_enabled else '❌ Выключены'}\n"
+            f"Расписание: каждый день в {backup_manager.backup_schedule}\n\n"
+            f"<i>Бэкапы создаются автоматически и хранятся 10 последних версий</i>",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+
+    elif args[0] == "restore" and len(args) > 1:
+        # Восстановление из бэкапа
+        backup_filename = args[1]
+
+        # Подтверждение восстановления
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"backup_restore_confirm:{backup_filename}"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="backup_cancel")
+            ]
+        ])
+
+        await message.answer(
+            f"🔄 <b>Подтверждение восстановления</b>\n\n"
+            f"Вы собираетесь восстановить базу из:\n"
+            f"<code>{backup_filename}</code>\n\n"
+            f"<b>ВНИМАНИЕ:</b> Текущая база будет заменена!",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+
+
+# Обработчики кнопок бэкапов
+@dp.callback_query(F.data == "backup_create")
+async def backup_create_handler(callback: CallbackQuery):
+    await callback.answer()
+    await backup_handler(callback.message, CommandObject(args=""))
+
+
+@dp.callback_query(F.data == "backup_toggle_auto")
+async def backup_toggle_auto_handler(callback: CallbackQuery):
+    backup_manager.auto_backup_enabled = not backup_manager.auto_backup_enabled
+    await callback.answer(f"Авто-бэкапы {'включены' if backup_manager.auto_backup_enabled else 'выключены'}")
+    await backup_handler(callback.message, CommandObject(args="auto"))
+
+
+@dp.callback_query(F.data.startswith("backup_restore_confirm:"))
+async def backup_restore_confirm_handler(callback: CallbackQuery):
+    backup_filename = callback.data.split(":")[1]
+
+    await callback.message.edit_text("🔄 Восстанавливаю базу...")
+    result = await db.restore_backup(backup_filename)
+
+    if result['success']:
+        text = f"✅ <b>База восстановлена!</b>\n\nФайл: <code>{backup_filename}</code>"
+        if result['pre_restore_backup']:
+            text += f"\n\n📁 Создан бэкап перед восстановлением: <code>{result['pre_restore_backup']}</code>"
+    else:
+        text = f"❌ <b>Ошибка восстановления:</b>\n{result['error']}"
+
+    await callback.message.edit_text(text, parse_mode="HTML")
+
+
+class BroadcastManager:
+    def __init__(self):
+        self.active_broadcasts = {}
+        self.broadcast_stats = {}
+
+    async def send_broadcast(self, text, broadcast_type="text", **kwargs):
+        """Отправка рассылки всем пользователям"""
+        users = await db.get_all_users()
+        total_users = len(users)
+
+        # Создаем ID рассылки для отслеживания
+        broadcast_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.active_broadcasts[broadcast_id] = {
+            'started_at': datetime.now(),
+            'total_users': total_users,
+            'processed': 0,
+            'success': 0,
+            'failed': 0,
+            'text': text
+        }
+
+        # Клавиатура для отмены рассылки
+        cancel_keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить рассылку", callback_data=f"broadcast_cancel:{broadcast_id}")]
+        ])
+
+        # Уведомляем админов о начале рассылки
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"📢 <b>Начата рассылка</b>\n\n"
+                    f"Текст: {text[:100]}{'...' if len(text) > 100 else ''}\n"
+                    f"Получателей: {total_users}\n"
+                    f"ID рассылки: <code>{broadcast_id}</code>",
+                    reply_markup=cancel_keyboard,
+                    parse_mode="HTML"
+                )
+            except:
+                continue
+
+        # Отправляем сообщения пользователям
+        success_count = 0
+        fail_count = 0
+
+        for i, user in enumerate(users):
+            try:
+                if broadcast_type == "text":
+                    await bot.send_message(user['id'], text)
+                elif broadcast_type == "photo" and 'photo' in kwargs:
+                    await bot.send_photo(user['id'], kwargs['photo'], caption=text)
+
+                success_count += 1
+                self.active_broadcasts[broadcast_id]['success'] = success_count
+
+                # Anti-flood задержка
+                if i % 10 == 0:  # Каждые 10 сообщений
+                    await asyncio.sleep(0.5)
+                else:
+                    await asyncio.sleep(0.1)
+
+            except Exception as e:
+                fail_count += 1
+                self.active_broadcasts[broadcast_id]['failed'] = fail_count
+                logging.error(f"Ошибка отправки пользователю {user['id']}: {e}")
+
+            self.active_broadcasts[broadcast_id]['processed'] = i + 1
+
+            # Обновляем прогресс каждые 50 пользователей
+            if i % 50 == 0:
+                await self.update_broadcast_progress(broadcast_id)
+
+        # Завершаем рассылку
+        await self.finish_broadcast(broadcast_id)
+        return success_count, fail_count
+
+    async def update_broadcast_progress(self, broadcast_id):
+        """Обновление прогресса рассылки"""
+        if broadcast_id not in self.active_broadcasts:
+            return
+
+        broadcast = self.active_broadcasts[broadcast_id]
+        progress = (broadcast['processed'] / broadcast['total_users']) * 100
+
+        # Можно добавить отправку прогресса админам
+        # Пока просто логируем
+        logging.info(f"Рассылка {broadcast_id}: {progress:.1f}%")
+
+    async def finish_broadcast(self, broadcast_id):
+        """Завершение рассылки и отправка статистики"""
+        if broadcast_id not in self.active_broadcasts:
+            return
+
+        broadcast = self.active_broadcasts[broadcast_id]
+        duration = datetime.now() - broadcast['started_at']
+
+        # Сохраняем статистику
+        self.broadcast_stats[broadcast_id] = {
+            **broadcast,
+            'finished_at': datetime.now(),
+            'duration': duration.total_seconds()
+        }
+
+        # Уведомляем админов о завершении
+        for admin_id in ADMIN_IDS:
+            try:
+                await bot.send_message(
+                    admin_id,
+                    f"✅ <b>Рассылка завершена</b>\n\n"
+                    f"ID: <code>{broadcast_id}</code>\n"
+                    f"✅ Успешно: {broadcast['success']}\n"
+                    f"❌ Ошибок: {broadcast['failed']}\n"
+                    f"📊 Всего: {broadcast['total_users']}\n"
+                    f"⏱ Длительность: {duration.total_seconds():.1f} сек\n"
+                    f"📈 Успешность: {(broadcast['success'] / broadcast['total_users'] * 100):.1f}%",
+                    parse_mode="HTML"
+                )
+            except:
+                continue
+
+        # Удаляем из активных рассылок
+        del self.active_broadcasts[broadcast_id]
+
+
+# Создаем менеджер рассылок
+broadcast_manager = BroadcastManager()
+
+
+@dp.message(Command("broadcast"))
+async def broadcast_handler(message: types.Message, command: CommandObject = None):
+    if message.from_user.id not in ADMIN_IDS:
+        await message.answer("❌ Доступ запрещен")
+        return
+
+    if not command or not command.args:
+        await message.answer(
+            "📢 <b>Система рассылок</b>\n\n"
+            "Команды:\n"
+            "<code>/broadcast текст</code> - текстовая рассылка\n"
+            "<code>/broadcast_photo текст</code> - рассылка с фото (ответьте на фото)\n"
+            "<code>/broadcast_test текст</code> - тестовая рассылка (только админам)\n"
+            "<code>/broadcast_stats</code> - статистика рассылок",
+            parse_mode="HTML"
+        )
+        return
+
+    broadcast_text = command.args
+
+    # Подтверждение рассылки
+    users_count = await db.get_user_count()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Начать рассылку", callback_data=f"broadcast_confirm:text:{broadcast_text}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")
+        ]
+    ])
+
+    await message.answer(
+        f"📢 <b>Подтверждение рассылки</b>\n\n"
+        f"Текст: {broadcast_text}\n"
+        f"Получателей: {users_count}\n\n"
+        f"<i>Рассылка может занять несколько минут</i>",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("broadcast_photo"))
+async def broadcast_photo_handler(message: types.Message, command: CommandObject = None):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    if not message.reply_to_message or not message.reply_to_message.photo:
+        await message.answer("❌ Ответьте на фото для рассылки с изображением")
+        return
+
+    if not command or not command.args:
+        await message.answer("❌ Укажите текст подписи: /broadcast_photo ваш текст")
+        return
+
+    photo = message.reply_to_message.photo[-1]  # Берем самое качественное фото
+    caption = command.args
+
+    users_count = await db.get_user_count()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Начать рассылку",
+                                 callback_data=f"broadcast_confirm:photo:{caption}:{photo.file_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")
+        ]
+    ])
+
+    await message.answer(
+        f"📢 <b>Подтверждение рассылки с фото</b>\n\n"
+        f"Текст: {caption}\n"
+        f"Получателей: {users_count}\n"
+        f"Фото: {photo.file_id}\n\n"
+        f"<i>Рассылка может занять несколько минут</i>",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+
+@dp.message(Command("broadcast_test"))
+async def broadcast_test_handler(message: types.Message, command: CommandObject = None):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    if not command or not command.args:
+        await message.answer("❌ Укажите текст: /broadcast_test ваш текст")
+        return
+
+    test_text = command.args
+
+    # Тестовая рассылка только админам
+    success_count = 0
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, f"🧪 <b>Тестовая рассылка</b>\n\n{test_text}", parse_mode="HTML")
+            success_count += 1
+        except:
+            pass
+
+    await message.answer(f"✅ Тестовая рассылка отправлена {success_count} админам")
+
+
+@dp.message(Command("broadcast_stats"))
+async def broadcast_stats_handler(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    if not broadcast_manager.broadcast_stats:
+        await message.answer("📊 Статистика рассылок отсутствует")
+        return
+
+    # Статистика последних 5 рассылок
+    recent_broadcasts = list(broadcast_manager.broadcast_stats.values())[-5:]
+
+    text = "📊 <b>Статистика рассылок</b>\n\n"
+
+    for i, broadcast in enumerate(recent_broadcasts[::-1], 1):  # Новые первыми
+        success_rate = (broadcast['success'] / broadcast['total_users']) * 100
+        duration_min = broadcast['duration'] / 60
+
+        text += f"{i}. <code>{broadcast['started_at'].strftime('%d.%m %H:%M')}</code>\n"
+        text += f"   ✅ {broadcast['success']} | ❌ {broadcast['failed']} | 📊 {broadcast['total_users']}\n"
+        text += f"   📈 {success_rate:.1f}% | ⏱ {duration_min:.1f} мин\n"
+        text += f"   💬 {broadcast['text'][:50]}{'...' if len(broadcast['text']) > 50 else ''}\n\n"
+
+    await message.answer(text, parse_mode="HTML")
+
+
+# Обработчики кнопок рассылок
+@dp.callback_query(F.data.startswith("broadcast_confirm:"))
+async def broadcast_confirm_handler(callback: CallbackQuery):
+    data_parts = callback.data.split(":")
+    broadcast_type = data_parts[1]
+    text = data_parts[2]
+
+    await callback.message.edit_text("🔄 Начинаю рассылку...")
+
+    if broadcast_type == "text":
+        success_count, fail_count = await broadcast_manager.send_broadcast(text)
+    elif broadcast_type == "photo":
+        photo_id = data_parts[3]
+        success_count, fail_count = await broadcast_manager.send_broadcast(
+            text, "photo", photo=photo_id
+        )
+
+    await callback.message.edit_text(
+        f"✅ <b>Рассылка завершена</b>\n\n"
+        f"✅ Успешно: {success_count}\n"
+        f"❌ Ошибок: {fail_count}\n"
+        f"📊 Всего: {success_count + fail_count}",
+        parse_mode="HTML"
+    )
+
+
+@dp.callback_query(F.data.startswith("broadcast_cancel:"))
+async def broadcast_cancel_handler(callback: CallbackQuery):
+    broadcast_id = callback.data.split(":")[1]
+
+    if broadcast_id in broadcast_manager.active_broadcasts:
+        # Можно добавить логику отмены
+        del broadcast_manager.active_broadcasts[broadcast_id]
+
+    await callback.message.edit_text("❌ Рассылка отменена")
+    await callback.answer("Рассылка отменена")
+
+
+@dp.callback_query(F.data == "broadcast_cancel")
+async def broadcast_simple_cancel_handler(callback: CallbackQuery):
+    await callback.message.edit_text("❌ Рассылка отменена")
+    await callback.answer()
+
+
+import logging
+from logging.handlers import RotatingFileHandler
+
+
+def setup_logging():
+    """Настройка системы логирования"""
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            RotatingFileHandler(
+                os.path.join(log_dir, 'bot.log'),
+                maxBytes=10 * 1024 * 1024,  # 10MB
+                backupCount=5
+            ),
+            logging.StreamHandler()  # Вывод в консоль
+        ]
+    )
+
+
+@dp.message(Command("logs"))
+async def logs_handler(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    args = message.text.split()[1:] if len(message.text.split()) > 1 else []
+    log_type = args[0] if args else "error"
+
+    log_file = "logs/bot.log"
+    if not os.path.exists(log_file):
+        await message.answer("❌ Файл логов не найден")
+        return
+
+    # Читаем последние строки логов
+    with open(log_file, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+        last_lines = lines[-50:]  # Последние 50 строк
+
+    log_text = "".join(last_lines)
+
+    if len(log_text) > 4000:  # Ограничение Telegram
+        log_text = log_text[-4000:]
+
+    await message.answer(f"📋 **Последние логи ({log_type}):**\n```\n{log_text}\n```",
+                         parse_mode="Markdown")
+
+
+@dp.message(Command("status"))
+async def status_handler(message: types.Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    import psutil
+    import datetime
+
+    # Системная информация
+    cpu_percent = psutil.cpu_percent()
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage('/')
+    boot_time = datetime.datetime.fromtimestamp(psutil.boot_time())
+
+    # Информация о боте
+    db_size = os.path.getsize(db.DB_PATH) / 1024 / 1024  # MB
+
+    text = f"""
+🖥 **Статус системы**
+
+**Ресурсы:**
+CPU: {cpu_percent}%
+Память: {memory.percent}% ({memory.used // 1024 // 1024}MB/{memory.total // 1024 // 1024}MB)
+Диск: {disk.percent}% ({disk.used // 1024 // 1024}MB/{disk.total // 1024 // 1024}MB)
+
+**Бот:**
+Время работы: {datetime.datetime.now() - boot_time}
+Размер БД: {db_size:.2f} MB
+Пользователей: {await db.get_user_count()}
+
+**Версия:** 1.0.0
+**Статус:** ✅ Активен
+"""
+    await message.answer(text, parse_mode="HTML")
+
+
 
 async def main():
     logging.basicConfig(level=logging.INFO)
