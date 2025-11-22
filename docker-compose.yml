@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: game_monitor_bot
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+      - YOOKASSA_SHOP_ID=${YOOKASSA_SHOP_ID}
+      - YOOKASSA_SECRET_KEY=${YOOKASSA_SECRET_KEY}
+      - ADMIN_IDS=${ADMIN_IDS}
+      - DB_PATH=/data/bot.db
+    volumes:
+      - ./data:/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Опционально: PostgreSQL для продакшена
+  # postgres:
+  #   image: postgres:13
+  #   environment:
+  #     POSTGRES_DB: bot_db
+  #     POSTGRES_USER: bot_user
+  #     POSTGRES_PASSWORD: bot_password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+
+volumes:
+  postgres_data:
